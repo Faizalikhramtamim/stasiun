@@ -1,7 +1,7 @@
 # 🅿️ Sistem Parkir Stasiun (ParkirSolo)
 
 Sistem Informasi Manajemen Parkir berbasis web yang dirancang khusus untuk mengelola area parkir stasiun, mendukung pencatatan kendaraan masuk/keluar manual, sistem inap, serta manajemen pemotongan kuota area dan *booking* tempat secara *real-time*.
-**Flowchart:**[Flowchart](https://raw.githubusercontent.com/Faizalikhramtamim/stasiun/refs/heads/main/Flowchart%20lengkap%20sistem%20parkir%20mall%20berbahasa%20Indonesia%20dengan%20elemen_%20Start%2C%20Login%20(Admin_Pengunjung)%2C%20Dashboard%2C%20Cek%20Ketersediaan%20Parkir%2C%20Pilih%20Lokasi%20Parkir%2C%20Input%20Data%20Kendaraan%20(Plat%20Nomor%2C%20Jenis%20Ke.jpg)
+**Flowchart:**[Flowchart](https://raw.githubusercontent.com/Faizalikhramtamim/stasiun/refs/heads/main/Flowchart%20lengkap%20sistem%20parkir%20mall%20berbahasa%20Indonesia%20dengan%20elemen_%20Start%2C%20Login%20(Admin_Pengunjung)%2C%20Dashboard%2C%20Cek%20Ketersediaan%20Parkir%2C%20Pilih%20Lokasi%20Parkir%2C%20Input%20Data%20Kendaraan%20(Plat%20Nomor%2C%20Jenis%20Ke.jpg))
 
 ---
 
