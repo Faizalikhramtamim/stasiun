@@ -5,7 +5,9 @@ include 'koneksi.php';
 $notif = "";
 $trigger_sound = false;
 
-// 1. Tambah Area Parkir (Dengan Kapasitas)
+// ==========================================
+// 1. TAMBAH & EDIT AREA PARKIR
+// ==========================================
 if (isset($_POST['tambah_area'])) {
     $nama_area = mysqli_real_escape_string($conn, $_POST['nama_area']);
     $jenis_kendaraan = mysqli_real_escape_string($conn, $_POST['jenis_kendaraan']);
@@ -18,7 +20,19 @@ if (isset($_POST['tambah_area'])) {
     }
 }
 
-// 2. Hapus Area Parkir
+if (isset($_POST['edit_area'])) {
+    $id_area = (int)$_POST['id_area'];
+    $nama_area = mysqli_real_escape_string($conn, $_POST['nama_area']);
+    $jenis_kendaraan = mysqli_real_escape_string($conn, $_POST['jenis_kendaraan']);
+    $kapasitas = (int)$_POST['kapasitas'];
+    
+    $query = mysqli_query($conn, "UPDATE tb_area_parkir SET nama_area='$nama_area', jenis_kendaraan='$jenis_kendaraan', kapasitas=$kapasitas WHERE id_area=$id_area");
+    if ($query) {
+        header("Location: admin.php?play_sound=1#area-parkir");
+        exit();
+    }
+}
+
 if (isset($_GET['hapus_area'])) {
     $id = (int)$_GET['hapus_area'];
     $query = mysqli_query($conn, "DELETE FROM tb_area_parkir WHERE id_area = $id");
@@ -28,7 +42,9 @@ if (isset($_GET['hapus_area'])) {
     }
 }
 
-// 3. Tambah Tarif
+// ==========================================
+// 2. TAMBAH, EDIT & HAPUS TARIF (HARGA)
+// ==========================================
 if (isset($_POST['tambah_tarif'])) {
     $jenis_kendaraan = mysqli_real_escape_string($conn, $_POST['jenis_kendaraan']);
     $tarif_per_jam = (int)$_POST['tarif_per_jam'];
@@ -39,7 +55,25 @@ if (isset($_POST['tambah_tarif'])) {
     }
 }
 
-// 4. Hapus Tarif
+if (isset($_POST['edit_tarif'])) {
+    $id_tarif = (int)$_POST['id_tarif'];
+    $jenis_kendaraan = mysqli_real_escape_string($conn, $_POST['jenis_kendaraan']);
+    $tarif_per_jam = (int)$_POST['tarif_per_jam'];
+    
+    $cek_pk = mysqli_query($conn, "SHOW COLUMNS FROM tb_tarif LIKE 'id%'");
+    $pk_name = 'id';
+    while($col = mysqli_fetch_assoc($cek_pk)){
+        $pk_name = $col['Field'];
+        break;
+    }
+
+    $query = mysqli_query($conn, "UPDATE tb_tarif SET jenis_kendaraan='$jenis_kendaraan', tarif_per_jam=$tarif_per_jam WHERE $pk_name=$id_tarif");
+    if ($query) {
+        header("Location: admin.php?play_sound=1#tarif-parkir");
+        exit();
+    }
+}
+
 if (isset($_GET['hapus_tarif'])) {
     $id = (int)$_GET['hapus_tarif'];
     $cek_pk = mysqli_query($conn, "SHOW COLUMNS FROM tb_tarif LIKE 'id%'");
@@ -55,7 +89,9 @@ if (isset($_GET['hapus_tarif'])) {
     }
 }
 
-// 5. Hapus Ulasan
+// ==========================================
+// 3. HAPUS ULASAN
+// ==========================================
 if (isset($_GET['hapus_ulasan'])) {
     $id = (int)$_GET['hapus_ulasan'];
     $cek_pk = mysqli_query($conn, "SHOW COLUMNS FROM tb_ulasan LIKE 'id%'");
@@ -71,7 +107,9 @@ if (isset($_GET['hapus_ulasan'])) {
     }
 }
 
-// 6. Tambah User (ID Dibuat Otomatis dan Acak)
+// ==========================================
+// 4. TAMBAH, EDIT & HAPUS USER
+// ==========================================
 if (isset($_POST['tambah_user'])) {
     $id_user = 'USR-' . strtoupper(substr(md5(uniqid(mt_rand(), true)), 0, 5));
     $nama_lengkap = mysqli_real_escape_string($conn, $_POST['nama_lengkap']);
@@ -86,12 +124,48 @@ if (isset($_POST['tambah_user'])) {
     }
 }
 
-// 7. Hapus User
+if (isset($_POST['edit_user'])) {
+    $id_user = mysqli_real_escape_string($conn, $_POST['id_user']);
+    $nama_lengkap = mysqli_real_escape_string($conn, $_POST['nama_lengkap']);
+    $username = mysqli_real_escape_string($conn, $_POST['username']);
+    $role = mysqli_real_escape_string($conn, $_POST['role']);
+    
+    if (!empty($_POST['password'])) {
+        $password = password_hash($_POST['password'], PASSWORD_DEFAULT);
+        $query = mysqli_query($conn, "UPDATE tb_user SET nama_lengkap='$nama_lengkap', username='$username', password='$password', role='$role' WHERE id_user='$id_user'");
+    } else {
+        $query = mysqli_query($conn, "UPDATE tb_user SET nama_lengkap='$nama_lengkap', username='$username', role='$role' WHERE id_user='$id_user'");
+    }
+
+    if ($query) {
+        header("Location: admin.php?play_sound=1#kelola-user");
+        exit();
+    }
+}
+
 if (isset($_GET['hapus_user'])) {
     $id_user = mysqli_real_escape_string($conn, $_GET['hapus_user']);
     $query = mysqli_query($conn, "DELETE FROM tb_user WHERE id_user = '$id_user'");
     if ($query) {
         header("Location: admin.php?play_sound=1#kelola-user");
+        exit();
+    }
+}
+
+// ==========================================
+// 5. HAPUS RIWAYAT TRANSAKSI
+// ==========================================
+if (isset($_GET['hapus_transaksi'])) {
+    $id_transaksi = (int)$_GET['hapus_transaksi'];
+    $cek_pk_trx = mysqli_query($conn, "SHOW COLUMNS FROM tb_transaksi LIKE 'id%'");
+    $pk_trx = 'id_transaksi';
+    while($col_trx = mysqli_fetch_assoc($cek_pk_trx)){
+        $pk_trx = $col_trx['Field'];
+        break;
+    }
+    $query = mysqli_query($conn, "DELETE FROM tb_transaksi WHERE $pk_trx = $id_transaksi");
+    if ($query) {
+        header("Location: admin.php?play_sound=1#transaksi");
         exit();
     }
 }
@@ -110,7 +184,7 @@ $q_transaksi_keluar = mysqli_query($conn, "SELECT t.*, k.plat_nomor, k.jenis_ken
                                            FROM tb_transaksi t 
                                            JOIN tb_kendaraan k ON t.id_kendaraan = k.id_kendaraan 
                                            JOIN tb_area_parkir a ON t.id_area = a.id_area 
-                                           WHERE t.status = 'keluar' ORDER BY t.id_transaksi DESC LIMIT 20");
+                                           WHERE t.status = 'keluar' ORDER BY t.waktu_keluar DESC LIMIT 20");
 
 $q_transaksi_masuk = mysqli_query($conn, "SELECT t.*, k.plat_nomor, k.jenis_kendaraan, a.nama_area 
                                           FROM tb_transaksi t 
@@ -189,7 +263,7 @@ $total_user = $q_users ? mysqli_num_rows($q_users) : 0;
 <body>
 
     <audio id="soundRafa" preload="auto">
-        <source src="img/berhasil.MPEG" type="audio/MPEG">
+        <source src="img/berhasil.mpeg" type="audio/mpeg">
         <source src="img/berhasil.wav" type="audio/wav">
     </audio>
 
@@ -314,6 +388,12 @@ $total_user = $q_users ? mysqli_num_rows($q_users) : 0;
                                         <td><?= htmlspecialchars($u['username'] ?? '-'); ?></td>
                                         <td><span class="badge bg-<?= $badge_bg; ?> px-2 py-1 text-uppercase"><?= $role; ?></span></td>
                                         <td class="text-center">
+                                            <button class="btn btn-warning btn-sm rounded-circle shadow-sm me-1" 
+                                                    data-bs-toggle="modal" 
+                                                    data-bs-target="#modalEditUser<?= str_replace(['-', ' '], '_', $u['id_user']); ?>" 
+                                                    title="Edit User">
+                                                <i class="fas fa-edit"></i>
+                                            </button>
                                             <a href="admin.php?hapus_user=<?= $u['id_user']; ?>" onclick="return confirm('Yakin ingin menghapus user ini?')" class="btn btn-danger btn-sm rounded-circle shadow-sm" title="Hapus User">
                                                 <i class="fas fa-trash"></i>
                                             </a>
@@ -329,6 +409,63 @@ $total_user = $q_users ? mysqli_num_rows($q_users) : 0;
                 </div>
             </div>
         </div>
+
+        <!-- Render Modal Edit User di Luar Tabel -->
+        <?php 
+        if($q_users && mysqli_num_rows($q_users) > 0) {
+            mysqli_data_seek($q_users, 0);
+            while($u = mysqli_fetch_assoc($q_users)) {
+                $role = $u['role'] ?? 'member';
+                $modal_id_user = str_replace(['-', ' '], '_', $u['id_user']);
+        ?>
+        <div class="modal fade" id="modalEditUser<?= $modal_id_user; ?>" tabindex="-1">
+            <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content border-0">
+                    <div class="modal-header border-bottom border-secondary">
+                        <h5 class="modal-title fw-bold text-white"><i class="fas fa-user-edit text-warning me-2"></i>Edit Pengguna: <?= htmlspecialchars($u['nama_lengkap']); ?></h5>
+                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                    </div>
+                    <form method="POST" action="admin.php">
+                        <div class="modal-body">
+                            <input type="hidden" name="id_user" value="<?= $u['id_user']; ?>">
+                            <div class="mb-3">
+                                <label class="form-label fw-semibold">ID Pengguna</label>
+                                <input type="text" class="form-control font-monospace bg-dark text-warning" value="<?= $u['id_user']; ?>" readonly>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label fw-semibold">Nama Lengkap</label>
+                                <input type="text" name="nama_lengkap" class="form-control" value="<?= htmlspecialchars($u['nama_lengkap']); ?>" required>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label fw-semibold">Username</label>
+                                <input type="text" name="username" class="form-control" value="<?= htmlspecialchars($u['username']); ?>" required>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label fw-semibold">Password Baru <small class="text-muted">(Kosongkan jika tidak ingin mengubah password)</small></label>
+                                <input type="password" name="password" class="form-control" placeholder="Biarkan kosong jika tetap">
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label fw-semibold">Pilih Role / Level</label>
+                                <select name="role" class="form-select" required>
+                                    <option value="admin" <?= ($role == 'admin') ? 'selected' : ''; ?> style="background:#1e293b;">Admin</option>
+                                    <option value="petugas" <?= ($role == 'petugas') ? 'selected' : ''; ?> style="background:#1e293b;">Petugas</option>
+                                    <option value="owner" <?= ($role == 'owner') ? 'selected' : ''; ?> style="background:#1e293b;">Owner</option>
+                                    <option value="member" <?= ($role == 'member') ? 'selected' : ''; ?> style="background:#1e293b;">Member</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="modal-footer border-0">
+                            <button type="button" class="btn btn-secondary btn-sm rounded-pill" data-bs-dismiss="modal">Batal</button>
+                            <button type="submit" name="edit_user" class="btn btn-warning btn-sm rounded-pill px-4 text-dark fw-bold">Simpan Perubahan</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+        <?php 
+            }
+        } 
+        ?>
 
         <!-- KELOLA AREA PARKIR & TARIF -->
         <div class="row g-4 mb-5">
@@ -359,13 +496,20 @@ $total_user = $q_users ? mysqli_num_rows($q_users) : 0;
                                     while($r = mysqli_fetch_assoc($q_area)): 
                                         $id_area = $r['id_area'] ?? 1;
                                         $kapasitas_val = $r['kapasitas'] ?? 0;
+                                        $jenis_area = $r['jenis_kendaraan'] ?? 'Mobil';
                                     ?>
                                     <tr>
                                         <td><?= $no++; ?></td>
                                         <td><strong><?= htmlspecialchars($r['nama_area'] ?? '-'); ?></strong></td>
-                                        <td><span class="badge bg-secondary"><?= htmlspecialchars(ucfirst($r['jenis_kendaraan'] ?? '-')); ?></span></td>
+                                        <td><span class="badge bg-secondary"><?= htmlspecialchars(ucfirst($jenis_area)); ?></span></td>
                                         <td><span class="badge bg-info text-dark fw-bold"><?= $kapasitas_val; ?> Unit</span></td>
                                         <td class="text-center">
+                                            <button class="btn btn-warning btn-sm rounded-circle shadow-sm me-1" 
+                                                    data-bs-toggle="modal" 
+                                                    data-bs-target="#modalEditArea<?= $id_area; ?>" 
+                                                    title="Edit Area">
+                                                <i class="fas fa-edit"></i>
+                                            </button>
                                             <a href="admin.php?hapus_area=<?= $id_area; ?>" onclick="return confirm('Yakin hapus area parkir ini?')" class="btn btn-danger btn-sm rounded-circle shadow-sm" title="Hapus">
                                                 <i class="fas fa-trash"></i>
                                             </a>
@@ -404,12 +548,20 @@ $total_user = $q_users ? mysqli_num_rows($q_users) : 0;
                                     mysqli_data_seek($q_tarif, 0); 
                                     while($t = mysqli_fetch_assoc($q_tarif)): 
                                         $id_tarif = $t['id'] ?? $t['id_tarif'] ?? 1;
+                                        $jenis_tarif = $t['jenis_kendaraan'] ?? 'Mobil';
+                                        $harga_tarif = $t['tarif_per_jam'] ?? 0;
                                     ?>
                                     <tr>
                                         <td><?= $no++; ?></td>
-                                        <td><strong><?= htmlspecialchars(ucfirst($t['jenis_kendaraan'] ?? '-')); ?></strong></td>
-                                        <td class="text-success fw-bold">Rp <?= number_format($t['tarif_per_jam'] ?? 0, 0, ',', '.'); ?></td>
+                                        <td><strong><?= htmlspecialchars(ucfirst($jenis_tarif)); ?></strong></td>
+                                        <td class="text-success fw-bold">Rp <?= number_format($harga_tarif, 0, ',', '.'); ?></td>
                                         <td class="text-center">
+                                            <button class="btn btn-warning btn-sm rounded-circle shadow-sm me-1" 
+                                                    data-bs-toggle="modal" 
+                                                    data-bs-target="#modalEditTarif<?= $id_tarif; ?>" 
+                                                    title="Edit Tarif">
+                                                <i class="fas fa-edit"></i>
+                                            </button>
                                             <a href="admin.php?hapus_tarif=<?= $id_tarif; ?>" onclick="return confirm('Yakin hapus tarif ini?')" class="btn btn-danger btn-sm rounded-circle shadow-sm" title="Hapus">
                                                 <i class="fas fa-trash"></i>
                                             </a>
@@ -423,6 +575,96 @@ $total_user = $q_users ? mysqli_num_rows($q_users) : 0;
                 </div>
             </div>
         </div>
+
+        <!-- Render Modal Edit Area di Luar Tabel -->
+        <?php 
+        mysqli_data_seek($q_area, 0);
+        while($r = mysqli_fetch_assoc($q_area)) {
+            $id_area = $r['id_area'] ?? 1;
+            $kapasitas_val = $r['kapasitas'] ?? 0;
+            $jenis_area = $r['jenis_kendaraan'] ?? 'Mobil';
+        ?>
+        <div class="modal fade" id="modalEditArea<?= $id_area; ?>" tabindex="-1">
+            <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content border-0">
+                    <div class="modal-header border-bottom border-secondary">
+                        <h5 class="modal-title fw-bold text-white"><i class="fas fa-edit text-warning me-2"></i>Edit Area Parkir</h5>
+                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                    </div>
+                    <form method="POST" action="admin.php">
+                        <div class="modal-body">
+                            <input type="hidden" name="id_area" value="<?= $id_area; ?>">
+                            <div class="mb-3">
+                                <label class="form-label fw-semibold">Nama Area Parkir</label>
+                                <input type="text" name="nama_area" class="form-control" value="<?= htmlspecialchars($r['nama_area']); ?>" required>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label fw-semibold">Jenis Kendaraan Khusus Area</label>
+                                <select name="jenis_kendaraan" class="form-select" required>
+                                    <option value="Mobil" <?= (strtolower($jenis_area) == 'mobil') ? 'selected' : ''; ?> style="background:#1e293b;">Mobil</option>
+                                    <option value="Motor" <?= (strtolower($jenis_area) == 'motor') ? 'selected' : ''; ?> style="background:#1e293b;">Motor</option>
+                                    <option value="Sepeda" <?= (strtolower($jenis_area) == 'sepeda') ? 'selected' : ''; ?> style="background:#1e293b;">Sepeda</option>
+                                    <option value="Bus/Truk" <?= (strtolower($jenis_area) == 'bus/truk') ? 'selected' : ''; ?> style="background:#1e293b;">Bus / Truk</option>
+                                    <option value="Box" <?= (strtolower($jenis_area) == 'box') ? 'selected' : ''; ?> style="background:#1e293b;">Mobil Box</option>
+                                </select>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label fw-semibold">Kapasitas Maksimal (Unit)</label>
+                                <input type="number" name="kapasitas" class="form-control" value="<?= $kapasitas_val; ?>" required>
+                            </div>
+                        </div>
+                        <div class="modal-footer border-0">
+                            <button type="button" class="btn btn-secondary btn-sm rounded-pill" data-bs-dismiss="modal">Batal</button>
+                            <button type="submit" name="edit_area" class="btn btn-warning btn-sm rounded-pill px-4 text-dark fw-bold">Simpan Perubahan</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+        <?php } ?>
+
+        <!-- Render Modal Edit Tarif di Luar Tabel -->
+        <?php 
+        mysqli_data_seek($q_tarif, 0);
+        while($t = mysqli_fetch_assoc($q_tarif)) {
+            $id_tarif = $t['id'] ?? $t['id_tarif'] ?? 1;
+            $jenis_tarif = $t['jenis_kendaraan'] ?? 'Mobil';
+            $harga_tarif = $t['tarif_per_jam'] ?? 0;
+        ?>
+        <div class="modal fade" id="modalEditTarif<?= $id_tarif; ?>" tabindex="-1">
+            <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content border-0">
+                    <div class="modal-header border-bottom border-secondary">
+                        <h5 class="modal-title fw-bold text-white"><i class="fas fa-edit text-success me-2"></i>Edit Tarif Resmi</h5>
+                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                    </div>
+                    <form method="POST" action="admin.php">
+                        <div class="modal-body">
+                            <input type="hidden" name="id_tarif" value="<?= $id_tarif; ?>">
+                            <div class="mb-3">
+                                <label class="form-label fw-semibold">Jenis Kendaraan</label>
+                                <select name="jenis_kendaraan" class="form-select" required>
+                                    <option value="Mobil" <?= (strtolower($jenis_tarif) == 'mobil') ? 'selected' : ''; ?> style="background:#1e293b;">Mobil</option>
+                                    <option value="Motor" <?= (strtolower($jenis_tarif) == 'motor') ? 'selected' : ''; ?> style="background:#1e293b;">Motor</option>
+                                    <option value="Sepeda" <?= (strtolower($jenis_tarif) == 'sepeda') ? 'selected' : ''; ?> style="background:#1e293b;">Sepeda</option>
+                                    <option value="Bus/Truk" <?= (strtolower($jenis_tarif) == 'bus/truk') ? 'selected' : ''; ?> style="background:#1e293b;">Bus / Truk</option>
+                                    <option value="Box" <?= (strtolower($jenis_tarif) == 'box') ? 'selected' : ''; ?> style="background:#1e293b;">Mobil Box</option>
+                                </select>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label fw-semibold">Tarif Per Hari (Rp)</label>
+                                <input type="number" name="tarif_per_jam" class="form-control" value="<?= $harga_tarif; ?>" required>
+                            </div>
+                        </div>
+                        <div class="modal-footer border-0">
+                            <button type="button" class="btn btn-secondary btn-sm rounded-pill" data-bs-dismiss="modal">Batal</button>
+                            <button type="submit" name="edit_tarif" class="btn btn-success btn-sm rounded-pill px-4 fw-bold">Simpan Perubahan</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+        <?php } ?>
 
         <!-- TRANSAKSI -->
         <div class="row mb-5" id="transaksi">
@@ -452,6 +694,7 @@ $total_user = $q_users ? mysqli_num_rows($q_users) : 0;
                                                 <th>Area</th>
                                                 <th>Waktu Keluar</th>
                                                 <th>Biaya Total</th>
+                                                <th class="text-center">Aksi Hapus</th>
                                             </tr>
                                         </thead>
                                         <tbody>
@@ -459,6 +702,7 @@ $total_user = $q_users ? mysqli_num_rows($q_users) : 0;
                                             $no_k = 1;
                                             if(mysqli_num_rows($q_transaksi_keluar) > 0): 
                                                 while($k = mysqli_fetch_assoc($q_transaksi_keluar)): 
+                                                    $id_trx_keluar = $k['id_transaksi'] ?? $k['id'] ?? 0;
                                             ?>
                                             <tr>
                                                 <td><?= $no_k++; ?></td>
@@ -467,9 +711,14 @@ $total_user = $q_users ? mysqli_num_rows($q_users) : 0;
                                                 <td><?= htmlspecialchars($k['nama_area'] ?? '-'); ?></td>
                                                 <td><small class="text-muted"><?= $k['waktu_keluar'] ?? '-'; ?></small></td>
                                                 <td class="text-success fw-bold">Rp <?= number_format($k['biaya_total'] ?? 0, 0, ',', '.'); ?></td>
+                                                <td class="text-center">
+                                                    <a href="admin.php?hapus_transaksi=<?= $id_trx_keluar; ?>" onclick="return confirm('Yakin ingin menghapus riwayat transaksi ini?')" class="btn btn-danger btn-sm rounded-circle shadow-sm" title="Hapus Riwayat Transaksi">
+                                                        <i class="fas fa-trash"></i>
+                                                    </a>
+                                                </td>
                                             </tr>
                                             <?php endwhile; else: ?>
-                                            <tr><td colspan="6" class="text-center text-muted py-4">Belum ada transaksi keluar.</td></tr>
+                                            <tr><td colspan="7" class="text-center text-muted py-4">Belum ada transaksi keluar.</td></tr>
                                             <?php endif; ?>
                                         </tbody>
                                     </table>
@@ -485,6 +734,7 @@ $total_user = $q_users ? mysqli_num_rows($q_users) : 0;
                                                 <th>Jenis</th>
                                                 <th>Area</th>
                                                 <th>Waktu Masuk</th>
+                                                <th class="text-center">Aksi Hapus</th>
                                             </tr>
                                         </thead>
                                         <tbody>
@@ -492,6 +742,7 @@ $total_user = $q_users ? mysqli_num_rows($q_users) : 0;
                                             $no_m = 1;
                                             if(mysqli_num_rows($q_transaksi_masuk) > 0): 
                                                 while($m = mysqli_fetch_assoc($q_transaksi_masuk)): 
+                                                    $id_trx_masuk = $m['id_transaksi'] ?? $m['id'] ?? 0;
                                             ?>
                                             <tr>
                                                 <td><?= $no_m++; ?></td>
@@ -499,9 +750,14 @@ $total_user = $q_users ? mysqli_num_rows($q_users) : 0;
                                                 <td><?= htmlspecialchars(ucwords(str_replace('_', ' ', $m['jenis_kendaraan'] ?? '-'))); ?></td>
                                                 <td><?= htmlspecialchars($m['nama_area'] ?? '-'); ?></td>
                                                 <td><small class="text-muted"><?= $m['waktu_masuk'] ?? '-'; ?></small></td>
+                                                <td class="text-center">
+                                                    <a href="admin.php?hapus_transaksi=<?= $id_trx_masuk; ?>" onclick="return confirm('Yakin ingin menghapus data kendaraan aktif ini?')" class="btn btn-danger btn-sm rounded-circle shadow-sm" title="Hapus Data Transaksi Aktif">
+                                                        <i class="fas fa-trash"></i>
+                                                    </a>
+                                                </td>
                                             </tr>
                                             <?php endwhile; else: ?>
-                                            <tr><td colspan="5" class="text-center text-muted py-4">Tidak ada kendaraan di dalam area parkir saat ini.</td></tr>
+                                            <tr><td colspan="6" class="text-center text-muted py-4">Tidak ada kendaraan di dalam area parkir saat ini.</td></tr>
                                             <?php endif; ?>
                                         </tbody>
                                     </table>
@@ -627,6 +883,9 @@ $total_user = $q_users ? mysqli_num_rows($q_users) : 0;
                             <select name="jenis_kendaraan" class="form-select" required>
                                 <option value="Mobil" style="background:#1e293b;">Mobil</option>
                                 <option value="Motor" style="background:#1e293b;">Motor</option>
+                                <option value="Sepeda" style="background:#1e293b;">Sepeda</option>
+                                <option value="Bus/Truk" style="background:#1e293b;">Bus / Truk</option>
+                                <option value="Box" style="background:#1e293b;">Mobil Box</option>
                             </select>
                         </div>
                         <div class="mb-3">
@@ -658,6 +917,9 @@ $total_user = $q_users ? mysqli_num_rows($q_users) : 0;
                             <select name="jenis_kendaraan" class="form-select" required>
                                 <option value="Mobil" style="background:#1e293b;">Mobil</option>
                                 <option value="Motor" style="background:#1e293b;">Motor</option>
+                                <option value="Sepeda" style="background:#1e293b;">Sepeda</option>
+                                <option value="Bus/Truk" style="background:#1e293b;">Bus / Truk</option>
+                                <option value="Box" style="background:#1e293b;">Mobil Box</option>
                             </select>
                         </div>
                         <div class="mb-3">
@@ -691,7 +953,6 @@ $total_user = $q_users ? mysqli_num_rows($q_users) : 0;
         <?php if ($trigger_sound): ?>
         window.addEventListener('DOMContentLoaded', (event) => {
             playRafaSound();
-            // Membersihkan parameter URL setelah aksi sukses
             if (window.history.replaceState) {
                 var cleanUrl = window.location.protocol + "//" + window.location.host + window.location.pathname + window.location.hash;
                 window.history.replaceState({path: cleanUrl}, '', cleanUrl);
