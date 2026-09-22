@@ -5,10 +5,6 @@ ini_set('display_errors', 1);
 session_start();
 include 'koneksi.php';
 
-if (isset($conn)) {
-    mysqli_select_db($conn, 'db_parkir'); 
-}
-
 // Validasi hak akses khusus member
 if (!isset($_SESSION['id_user']) || $_SESSION['role'] != 'member') {
     header("Location: index.php");
@@ -19,26 +15,44 @@ $id_user_login = $_SESSION['id_user'];
 $nama_member = isset($_SESSION['nama_lengkap']) ? $_SESSION['nama_lengkap'] : (isset($_SESSION['nama']) ? $_SESSION['nama'] : 'Member');
 
 $trigger_sound = false;
-$show_qr_modal_id = 0; // Untuk mendeteksi ID booking baru yang harus memunculkan QR
+$show_qr_modal_id = 0; 
 
-// ==========================================
-// DETEKSI OTOMATIS PRIMARY KEY TABEL tb_booking
-// ==========================================
-$pk_booking = 'id_booking'; // Default fallback
-$cek_pk = mysqli_query($conn, "SHOW COLUMNS FROM tb_booking");
-if ($cek_pk && mysqli_num_rows($cek_pk) > 0) {
-    while ($d_pk = mysqli_fetch_assoc($cek_pk)) {
-        if (isset($d_pk['Key']) && $d_pk['Key'] == 'PRI') {
-            $pk_booking = $d_pk['Field'];
+// Deteksi primary key tabel booking secara dinamis
+$cek_pk_b = mysqli_query($conn, "SHOW COLUMNS FROM tb_booking");
+$pk_booking = 'id_booking';
+if ($cek_pk_b && mysqli_num_rows($cek_pk_b) > 0) {
+    while ($d_pk_b = mysqli_fetch_assoc($cek_pk_b)) {
+        if (isset($d_pk_b['Key']) && $d_pk_b['Key'] == 'PRI') {
+            $pk_booking = $d_pk_b['Field'];
             break;
         }
     }
 }
 
 // ==========================================
+// PROSES PEMBATALAN BOOKING OLEH MEMBER
+// ==========================================
+if (isset($_GET['aksi']) && $_GET['aksi'] == 'batal' && isset($_GET['id_b'])) {
+    $id_b = intval($_GET['id_b']);
+    
+    $q_cek_pemilik = mysqli_query($conn, "SELECT * FROM tb_booking WHERE $pk_booking = '$id_b' AND id_user = '$id_user_login' AND LOWER(status) = 'menunggu' LIMIT 1");
+    
+    if ($q_cek_pemilik && mysqli_num_rows($q_cek_pemilik) > 0) {
+        $update_batal = mysqli_query($conn, "UPDATE tb_booking SET status = 'Batal' WHERE $pk_booking = '$id_b'");
+        if ($update_batal) {
+            header("Location: member.php?status=sukses_batal&play_sound=1");
+            exit;
+        }
+    }
+    header("Location: member.php?status=gagal_batal&play_sound=1");
+    exit;
+}
+
+// ==========================================
 // PROSES TAMBAH BOOKING BARU
 // ==========================================
 if (isset($_POST['tambah_booking'])) {
+    $nama_pemilik = mysqli_real_escape_string($conn, $nama_member);
     $plat_nomor = strtoupper(mysqli_real_escape_string($conn, $_POST['nomor_plat']));
     $jenis_kendaraan = mysqli_real_escape_string($conn, $_POST['jenis_kendaraan']);
     $id_area = intval($_POST['id_area']);
@@ -47,15 +61,43 @@ if (isset($_POST['tambah_booking'])) {
     if ($durasi_hari < 1) { $durasi_hari = 1; }
     if ($durasi_hari > 3) { $durasi_hari = 3; }
 
-    // Hitung estimasi biaya dasar otomatis
-    $tarif_harian = (strtolower($jenis_kendaraan) == 'mobil') ? 25000 : 15000;
-    $total_biaya = $tarif_harian * $durasi_hari;
+    // Cek kuota persis logika petugas.php (berdasarkan tb_transaksi status 'masuk')
+    $lanjutkan_booking = true;
+    $q_cek_kuota_input = mysqli_query($conn, "
+        SELECT (a.kapasitas - (SELECT COUNT(*) FROM tb_transaksi t WHERE t.id_area = a.id_area AND t.status = 'masuk')) AS sisa_kuota 
+        FROM tb_area_parkir a WHERE a.id_area = '$id_area' LIMIT 1
+    ");
+    
+    if ($q_cek_kuota_input && mysqli_num_rows($q_cek_kuota_input) > 0) {
+        $dt_ki = mysqli_fetch_assoc($q_cek_kuota_input);
+        if (intval($dt_ki['sisa_kuota']) <= 0) {
+            $lanjutkan_booking = false;
+        }
+    }
 
-    $query_insert = mysqli_query($conn, "INSERT INTO tb_booking (id_user, nomor_plat, jenis_kendaraan, id_area, durasi_hari, total_biaya, status) 
-                                         VALUES ('$id_user_login', '$plat_nomor', '$jenis_kendaraan', '$id_area', '$durasi_hari', '$total_biaya', 'Menunggu')");
+    if (!$lanjutkan_booking) {
+        header("Location: member.php?status=penuh&play_sound=1");
+        exit;
+    }
+
+    $q_tarif = mysqli_query($conn, "SELECT * FROM tb_tarif WHERE LOWER(jenis_kendaraan) = LOWER('$jenis_kendaraan') LIMIT 1");
+    $tarif_harian = 15000; 
+    if ($q_tarif && mysqli_num_rows($q_tarif) > 0) {
+        $d_tarif = mysqli_fetch_assoc($q_tarif);
+        if (isset($d_tarif['tarif_per_jam'])) { $tarif_harian = intval($d_tarif['tarif_per_jam']); }
+        elseif (isset($d_tarif['tarif_harian'])) { $tarif_harian = intval($d_tarif['tarif_harian']); }
+        elseif (isset($d_tarif['tarif'])) { $tarif_harian = intval($d_tarif['tarif']); }
+        elseif (isset($d_tarif['harga'])) { $tarif_harian = intval($d_tarif['harga']); }
+        elseif (isset($d_tarif['biaya'])) { $tarif_harian = intval($d_tarif['biaya']); }
+    }
+    
+    $total_biaya = $tarif_harian * $durasi_hari;
+    $tanggal_booking = date('Y-m-d H:i:s');
+
+    $query_insert = mysqli_query($conn, "INSERT INTO tb_booking (nama_pemilik, nomor_plat, jenis_kendaraan, tanggal_booking, total_biaya, id_user, id_area, durasi_hari, status) 
+                                         VALUES ('$nama_pemilik', '$plat_nomor', '$jenis_kendaraan', '$tanggal_booking', '$total_biaya', '$id_user_login', '$id_area', '$durasi_hari', 'Menunggu')");
 
     if ($query_insert) {
-        // Ambil ID booking yang baru saja dimasukkan agar langsung memunculkan QR
         $last_id = mysqli_insert_id($conn);
         header("Location: member.php?status=sukses_booking&play_sound=1&show_qr=" . $last_id);
         exit;
@@ -73,16 +115,34 @@ if (isset($_GET['show_qr'])) {
     $show_qr_modal_id = intval($_GET['show_qr']);
 }
 
-// ==========================================
-// AMBIL DATA AREA PARKIR & RIWAYAT BOOKING
-// ==========================================
-$query_area = mysqli_query($conn, "SELECT * FROM tb_area_parkir");
+$query_tarif_form = mysqli_query($conn, "SELECT * FROM tb_tarif");
+$data_tarif_db = [];
+if ($query_tarif_form && mysqli_num_rows($query_tarif_form) > 0) {
+    while($t = mysqli_fetch_assoc($query_tarif_form)) {
+        $key_t = strtolower(trim($t['jenis_kendaraan']));
+        $kolom_h = '15000';
+        if (isset($t['tarif_per_jam'])) { $kolom_h = $t['tarif_per_jam']; }
+        elseif (isset($t['tarif_harian'])) { $kolom_h = $t['tarif_harian']; }
+        elseif (isset($t['tarif'])) { $kolom_h = $t['tarif']; }
+        elseif (isset($t['harga'])) { $kolom_h = $t['harga']; }
+        elseif (isset($t['biaya'])) { $kolom_h = $t['biaya']; }
+        
+        $data_tarif_db[$key_t] = $kolom_h;
+    }
+}
+
+// Ambil data area parkir dengan rumus sisa kuota persis petugas.php
+$query_area = mysqli_query($conn, "
+    SELECT a.*, 
+    (a.kapasitas - (SELECT COUNT(*) FROM tb_transaksi t WHERE t.id_area = a.id_area AND t.status = 'masuk')) AS sisa_kuota 
+    FROM tb_area_parkir a
+");
 
 $query_riwayat = mysqli_query($conn, "SELECT b.*, a.nama_area 
-                                     FROM tb_booking b 
-                                     LEFT JOIN tb_area_parkir a ON b.id_area = a.id_area 
-                                     WHERE b.id_user = '$id_user_login' 
-                                     ORDER BY b.$pk_booking DESC");
+                                       FROM tb_booking b 
+                                       LEFT JOIN tb_area_parkir a ON b.id_area = a.id_area 
+                                       WHERE b.id_user = '$id_user_login' 
+                                       ORDER BY b.$pk_booking DESC");
 ?>
 <!DOCTYPE html>
 <html lang="id">
@@ -139,15 +199,13 @@ $query_riwayat = mysqli_query($conn, "SELECT b.*, a.nama_area
         }
         .form-control::placeholder { color: #94a3b8; }
         .modal-content { background-color: #1e293b; color: #e2e8f0; }
+        option:disabled { color: #64748b; background-color: #0f172a; }
     </style>
 </head>
 <body>
 
-    <!-- Audio Efek Suara dari Folder img/ -->
     <audio id="soundRafa" preload="auto">
         <source src="img/berhasil.MPEG" type="audio/MPEG">
-        <source src="img/berhasil.MPEG" type="audio/MPEG">
-        <source src="img/salah.MPEG " type="audio/MPEG">
     </audio>
 
     <nav class="navbar navbar-dark navbar-custom px-4 py-3 shadow-sm sticky-top">
@@ -159,7 +217,7 @@ $query_riwayat = mysqli_query($conn, "SELECT b.*, a.nama_area
 
     <div class="container py-5">
 
-        <!-- BAGIAN 1: FORM BUAT BOOKING PARKIR INAP -->
+        <!-- FORM BOOKING -->
         <div class="card">
             <div class="card-header py-3 px-4 fw-bold">📝 Form Pre-Order / Booking Parkir Inap Stasiun</div>
             <div class="card-body p-4">
@@ -172,8 +230,24 @@ $query_riwayat = mysqli_query($conn, "SELECT b.*, a.nama_area
                         <label class="form-label fw-semibold small text-info">JENIS KENDARAAN</label>
                         <select name="jenis_kendaraan" id="jenis_kendaraan" class="form-select" required>
                             <option value="">-- Pilih Jenis --</option>
-                            <option value="motor">Motor (Rp 15.000 / hari)</option>
-                            <option value="mobil">Mobil (Rp 25.000 / hari)</option>
+                            <?php
+                            $pilihan_kendaraan = [
+                                ['Motor', 'Motor'],
+                                ['Mobil', 'Mobil'],
+                                ['Bus/Truk', 'Bus / Truk']
+                            ];
+
+                            foreach ($pilihan_kendaraan as $pk) {
+                                $val_db = $pk[0];
+                                $label_ui = $pk[1];
+                                
+                                $key_cek = strtolower(trim($val_db));
+                                $harga = isset($data_tarif_db[$key_cek]) ? $data_tarif_db[$key_cek] : 0;
+                                $format_harga = $harga > 0 ? ' (Rp ' . number_format($harga, 0, ',', '.') . ' / hari)' : '';
+
+                                echo "<option value=\"{$val_db}\">{$label_ui}{$format_harga}</option>";
+                            }
+                            ?>
                         </select>
                     </div>
                     <div class="col-md-3">
@@ -182,9 +256,27 @@ $query_riwayat = mysqli_query($conn, "SELECT b.*, a.nama_area
                             <option value="">-- Pilih Area Stasiun --</option>
                             <?php 
                             if ($query_area && mysqli_num_rows($query_area) > 0) {
+                                mysqli_data_seek($query_area, 0);
                                 while($area = mysqli_fetch_assoc($query_area)) {
-                                    $kapasitas_info = isset($area['kapasitas']) ? " (Kapasitas: {$area['kapasitas']})" : "";
-                                    echo "<option value='{$area['id_area']}' data-nama='" . strtolower($area['nama_area']) . "'>{$area['nama_area']}{$kapasitas_info}</option>";
+                                    $id_a = $area['id_area'];
+                                    $kapasitas_maksimal = intval($area['kapasitas']);
+                                    $sisa_kuota = max(0, intval($area['sisa_kuota'])); // Sinkron persis petugas.php
+                                    
+                                    $is_penuh = ($sisa_kuota <= 0);
+                                    $attr_disabled = $is_penuh ? 'disabled' : '';
+                                    
+                                    $raw_jenis = strtolower(trim($area['jenis_kendaraan']));
+                                    if (strpos($raw_jenis, 'bus') !== false || strpos($raw_jenis, 'truk') !== false) {
+                                        $clean_jenis = 'bus/truk';
+                                    } elseif (strpos($raw_jenis, 'motor') !== false) {
+                                        $clean_jenis = 'motor';
+                                    } else {
+                                        $clean_jenis = 'mobil';
+                                    }
+                                    
+                                    $info_kuota = " (Sisa: {$sisa_kuota} dari {$kapasitas_maksimal}) — Khusus " . $area['jenis_kendaraan'];
+                                    
+                                    echo "<option value='{$id_a}' data-sisa='{$sisa_kuota}' data-jenis='{$clean_jenis}' {$attr_disabled}>{$area['nama_area']}{$info_kuota}</option>";
                                 }
                             }
                             ?>
@@ -202,7 +294,7 @@ $query_riwayat = mysqli_query($conn, "SELECT b.*, a.nama_area
             </div>
         </div>
 
-        <!-- BAGIAN 2: RIWAYAT BOOKING MEMBER -->
+        <!-- RIWAYAT BOOKING -->
         <div class="card">
             <div class="card-header py-3 px-4 fw-bold">📋 Riwayat Booking & Pembayaran QR Parkir Anda</div>
             <div class="card-body p-0">
@@ -221,15 +313,15 @@ $query_riwayat = mysqli_query($conn, "SELECT b.*, a.nama_area
                             </tr>
                         </thead>
                         <tbody>
-                            <?php 
+                            <?php
                             $modal_qr_list = [];
 
                             if ($query_riwayat && mysqli_num_rows($query_riwayat) > 0) {
                                 while($row = mysqli_fetch_assoc($query_riwayat)) {
                                     $status = $row['status'];
                                     $badge_color = 'bg-warning text-dark';
-                                    if ($status == 'Lunas') $badge_color = 'bg-success';
-                                    else if ($status == 'Batal') $badge_color = 'bg-danger';
+                                    if (strtolower($status) == 'lunas') $badge_color = 'bg-success';
+                                    else if (strtolower($status) == 'batal') $badge_color = 'bg-danger';
 
                                     $current_id_booking = isset($row[$pk_booking]) ? $row[$pk_booking] : '-';
 
@@ -252,12 +344,19 @@ $query_riwayat = mysqli_query($conn, "SELECT b.*, a.nama_area
                                     </span>
                                 </td>
                                 <td class="text-center">
-                                    <?php if(strtolower($status) != 'lunas'): ?>
-                                        <button type="button" class="btn btn-warning btn-sm rounded-pill fw-semibold px-3" data-bs-toggle="modal" data-bs-target="#modalQr<?= $current_id_booking; ?>">
-                                            <i class="fas fa-qrcode me-1"></i> Lihat QR
-                                        </button>
-                                    <?php else: ?>
+                                    <?php if(strtolower($status) == 'menunggu'): ?>
+                                        <div class="d-flex justify-content-center gap-2">
+                                            <button type="button" class="btn btn-warning btn-sm rounded-pill fw-semibold px-3" data-bs-toggle="modal" data-bs-target="#modalQr<?= $current_id_booking; ?>">
+                                                <i class="fas fa-qrcode me-1"></i> Lihat QR
+                                            </button>
+                                            <a href="member.php?aksi=batal&id_b=<?= $current_id_booking; ?>" class="btn btn-danger btn-sm rounded-pill fw-semibold px-3 btn-batal-pesanan">
+                                                <i class="fas fa-times-circle me-1"></i> Batalkan
+                                            </a>
+                                        </div>
+                                    <?php elseif(strtolower($status) == 'lunas'): ?>
                                         <span class="text-success small fw-semibold"><i class="fas fa-check-circle me-1"></i>Selesai</span>
+                                    <?php else: ?>
+                                        <span class="text-danger small fw-semibold"><i class="fas fa-ban me-1"></i>Dibatalkan</span>
                                     <?php endif; ?>
                                 </td>
                             </tr>
@@ -275,7 +374,7 @@ $query_riwayat = mysqli_query($conn, "SELECT b.*, a.nama_area
 
     </div>
 
-    <!-- SEMUA MODAL QR -->
+    <!-- MODAL QR -->
     <?php foreach($modal_qr_list as $m): ?>
     <div class="modal fade text-start" id="modalQr<?= $m['id']; ?>" tabindex="-1">
         <div class="modal-dialog modal-dialog-centered">
@@ -287,9 +386,8 @@ $query_riwayat = mysqli_query($conn, "SELECT b.*, a.nama_area
                 <div class="modal-body text-center py-4">
                     <p class="small text-muted mb-3">Silakan scan kode QR di bawah ini melalui aplikasi m-Banking / E-Wallet Anda untuk melunasi tagihan sebesar <strong class="text-info">Rp <?= number_format($m['total'], 0, ',', '.'); ?></strong></p>
                     
-                    <!-- Menampilkan Gambar QR dari file JPEG di folder img/ dengan fallback API online -->
                     <div class="p-3 bg-white rounded d-inline-block shadow-sm mb-3">
-                        <img src="img/qr.JPEG" alt="qr Code Pembayaran" class="JPEG-fluid" style="max-width: 200px;">
+                        <img src="img/qr.JPEG" alt="qr Code Pembayaran" class="img-fluid" style="max-width: 200px;">
                     </div>
                     <p class="small text-warning mb-0">Status akan otomatis diperbarui oleh petugas setelah pembayaran diterima.</p>
                 </div>
@@ -301,7 +399,6 @@ $query_riwayat = mysqli_query($conn, "SELECT b.*, a.nama_area
     </div>
     <?php endforeach; ?>
 
-    <!-- FontAwesome & Bootstrap JS -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
@@ -324,7 +421,6 @@ $query_riwayat = mysqli_query($conn, "SELECT b.*, a.nama_area
         });
         <?php endif; ?>
 
-        // Otomatis Munculkan Modal QR Jika Baru Saja Kirim Booking
         <?php if ($show_qr_modal_id > 0): ?>
         window.addEventListener('DOMContentLoaded', (event) => {
             var myModalEl = document.getElementById('modalQr' + <?= $show_qr_modal_id; ?>);
@@ -340,88 +436,89 @@ $query_riwayat = mysqli_query($conn, "SELECT b.*, a.nama_area
         });
         <?php endif; ?>
 
-        // Skrip Pilih Area Berdasarkan Jenis Kendaraan
-        document.getElementById('jenis_kendaraan').addEventListener('change', function() {
-            const jenis = this.value.toLowerCase();
+        <?php if (isset($_GET['status']) && $_GET['status'] == 'penuh'): ?>
+        Swal.fire({
+            icon: 'error',
+            title: 'Area Penuh!',
+            text: 'Maaf, area parkir yang Anda pilih sudah penuh dan tidak dapat dibooking.',
+            confirmButtonColor: '#38bdf8'
+        });
+        <?php endif; ?>
+
+        document.addEventListener("DOMContentLoaded", function() {
+            const selectKendaraan = document.getElementById('jenis_kendaraan');
             const selectArea = document.getElementById('id_area');
-            let targetKeyword = '';
+            
+            if (selectKendaraan && selectArea) {
+                const optionsArea = Array.from(selectArea.options);
 
-            if (jenis === 'motor') {
-                targetKeyword = 'motor';
-            } else if (jenis === 'mobil') {
-                targetKeyword = 'mobil';
-            }
+                function filterAreaParkir() {
+                    const rawPilihan = selectKendaraan.value.toLowerCase();
+                    let jenisPilihan = '';
+                    
+                    if (rawPilihan.includes('bus') || rawPilihan.includes('truk')) {
+                        jenisPilihan = 'bus/truk';
+                    } else if (rawPilihan.includes('motor')) {
+                        jenisPilihan = 'motor';
+                    } else if (rawPilihan.includes('mobil')) {
+                        jenisPilihan = 'mobil';
+                    }
 
-            if (targetKeyword) {
-                for (let i = 0; i < selectArea.options.length; i++) {
-                    const optionText = selectArea.options[i].text.toLowerCase();
-                    if (optionText.includes(targetKeyword)) {
-                        selectArea.selectedIndex = i;
-                        break;
+                    selectArea.value = "";
+                    let firstValidIndex = -1;
+                    
+                    optionsArea.forEach((option, index) => {
+                        if (option.value === "") {
+                            option.style.display = "block";
+                            return;
+                        }
+                        
+                        const jenisArea = option.getAttribute('data-jenis');
+                        
+                        if (jenisPilihan === "" || jenisArea === jenisPilihan) {
+                            option.style.display = "block";
+                            option.disabled = false;
+                            
+                            // Otomatis pilih area pertama yang cocok dan belum penuh
+                            if (firstValidIndex === -1 && !option.hasAttribute('disabled')) {
+                                firstValidIndex = index;
+                            }
+                        } else {
+                            option.style.display = "none";
+                            option.disabled = true;
+                        }
+                    });
+
+                    if (firstValidIndex !== -1) {
+                        selectArea.selectedIndex = firstValidIndex;
                     }
                 }
-            } else {
-                selectArea.selectedIndex = 0;
+
+                selectKendaraan.addEventListener('change', filterAreaParkir);
             }
         });
 
-        const urlParams = new URLSearchParams(window.location.search);
-        const statusParam = urlParams.get('status');
-
-        if (statusParam) {
-            const cleanUrl = window.location.origin + 
-                             window.location.pathname + 
-                             (window.location.search
-                                .replace(/([?&])status=[^&]*(&?)/, function(match, p1, p2) {
-                                    return p2 ? p1 : '';
-                                })
-                                .replace(/[?&]$/, '')
-                             );
-
-            window.history.replaceState({}, document.title, cleanUrl);
-
-            if (statusParam === 'sukses_booking') {
-                Swal.fire({
-                    icon: 'success',
-                    title: 'Booking Berhasil!',
-                    text: 'Silakan lakukan pembayaran melalui QR code yang muncul.',
-                    timer: 3500,
-                    showConfirmButton: false
-                });
-            } else if (statusParam === 'gagal_booking') {
-                Swal.fire({
-                    icon: 'error',
-                    title: 'Oops!',
-                    text: 'Gagal membuat booking. Silakan coba kembali.'
-                });
-            }
-        }
-
-        const btnLogout = document.getElementById('btn-logout');
-        if (btnLogout) {
-            btnLogout.addEventListener('click', function(e) {
+        document.querySelectorAll('.btn-batal-pesanan').forEach(button => {
+            button.addEventListener('click', function(e) {
                 e.preventDefault();
-                const logoutUrl = this.getAttribute('href');
-                playRafaSound();
+                const cancelUrl = this.getAttribute('href');
 
                 Swal.fire({
-                    title: 'Keluar dari Sesi?',
-                    text: 'Anda akan mengakhiri sesi member saat ini.',
+                    title: 'Batalkan Pesanan?',
+                    text: 'Tindakan ini tidak dapat dibatalkan setelah dikonfirmasi.',
                     icon: 'warning',
                     showCancelButton: true,
-                    confirmButtonText: 'Ya, Logout',
-                    cancelButtonText: 'Batal',
+                    confirmButtonText: 'Ya, Batalkan',
+                    cancelButtonText: 'Kembali',
                     confirmButtonColor: '#d33',
                     cancelButtonColor: '#6c757d'
                 }).then((result) => {
                     if (result.isConfirmed) {
-                        setTimeout(() => {
-                            window.location.href = logoutUrl;
-                        }, 500);
+                        window.location.href = cancelUrl;
                     }
                 });
             });
-        }
+        });
     </script>
 </body>
 </html>
