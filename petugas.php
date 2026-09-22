@@ -52,6 +52,35 @@ if (isset($_GET['aksi_booking']) && isset($_GET['id_b'])) {
             $durasi_hari = isset($book['durasi_hari']) ? intval($book['durasi_hari']) : 1;
             $id_user_member = intval($book['id_user']);
             
+            // Validasi kuota saat setujui booking
+            $q_cek_kuota_b = mysqli_query($conn, "
+                SELECT (a.kapasitas - (SELECT COUNT(*) FROM tb_transaksi t WHERE t.id_area = a.id_area AND t.status = 'masuk')) AS sisa_kuota 
+                FROM tb_area_parkir a WHERE a.id_area = '$id_area' LIMIT 1
+            ");
+            if ($q_cek_kuota_b && mysqli_num_rows($q_cek_kuota_b) > 0) {
+                $dt_kb = mysqli_fetch_assoc($q_cek_kuota_b);
+                if (intval($dt_kb['sisa_kuota']) <= 0) {
+                    // Otomatis ubah status booking user menjadi Batal jika area penuh
+                    mysqli_query($conn, "UPDATE tb_booking SET status = 'Batal' WHERE $pk_booking = '$id_b'");
+                    
+                    header("Location: petugas.php?status=error_penuh");
+                    exit;
+                }
+            }
+
+            // Ambil tarif dari database berdasarkan jenis kendaraan untuk menghitung total biaya transaksi
+            $q_trf_booking = mysqli_query($conn, "SELECT * FROM tb_tarif WHERE LOWER(jenis_kendaraan) = LOWER('$jenis') LIMIT 1");
+            $tarif_harian_b = 15000;
+            if ($q_trf_booking && mysqli_num_rows($q_trf_booking) > 0) {
+                $dt_trf_b = mysqli_fetch_assoc($q_trf_booking);
+                if (isset($dt_trf_b['tarif_per_jam'])) { $tarif_harian_b = intval($dt_trf_b['tarif_per_jam']); }
+                elseif (isset($dt_trf_b['tarif_harian'])) { $tarif_harian_b = intval($dt_trf_b['tarif_harian']); }
+                elseif (isset($dt_trf_b['tarif'])) { $tarif_harian_b = intval($dt_trf_b['tarif']); }
+                elseif (isset($dt_trf_b['harga'])) { $tarif_harian_b = intval($dt_trf_b['harga']); }
+                elseif (isset($dt_trf_b['biaya'])) { $tarif_harian_b = intval($dt_trf_b['biaya']); }
+            }
+            $total_biaya_booking = $tarif_harian_b * $durasi_hari;
+
             $waktu_masuk = date('Y-m-d H:i:s');
             $id_parkir = rand(100000, 999999);
 
@@ -73,11 +102,11 @@ if (isset($_GET['aksi_booking']) && isset($_GET['id_b'])) {
 
             $cek_kolom = mysqli_query($conn, "SHOW COLUMNS FROM tb_transaksi LIKE 'durasi_jam'");
             if ($cek_kolom && mysqli_num_rows($cek_kolom) > 0) {
-                mysqli_query($conn, "INSERT INTO tb_transaksi (id_parkir, id_kendaraan, waktu_masuk, id_tarif, status, id_user, id_area, durasi_jam) 
-                                     VALUES ('$id_parkir', '$id_kendaraan', '$waktu_masuk', '$id_tarif', 'masuk', '$id_user_member', '$id_area', '$durasi_hari')");
+                mysqli_query($conn, "INSERT INTO tb_transaksi (id_parkir, id_kendaraan, waktu_masuk, id_tarif, status, id_user, id_area, durasi_jam, biaya_total) 
+                                     VALUES ('$id_parkir', '$id_kendaraan', '$waktu_masuk', '$id_tarif', 'masuk', '$id_user_member', '$id_area', '$durasi_hari', '$total_biaya_booking')");
             } else {
-                mysqli_query($conn, "INSERT INTO tb_transaksi (id_parkir, id_kendaraan, waktu_masuk, id_tarif, status, id_user, id_area) 
-                                     VALUES ('$id_parkir', '$id_kendaraan', '$waktu_masuk', '$id_tarif', 'masuk', '$id_user_member', '$id_area')");
+                mysqli_query($conn, "INSERT INTO tb_transaksi (id_parkir, id_kendaraan, waktu_masuk, id_tarif, status, id_user, id_area, biaya_total) 
+                                     VALUES ('$id_parkir', '$id_kendaraan', '$waktu_masuk', '$id_tarif', 'masuk', '$id_user_member', '$id_area', '$total_biaya_booking')");
             }
 
             mysqli_query($conn, "UPDATE tb_booking SET status = 'Lunas' WHERE $pk_booking = '$id_b'");
@@ -94,10 +123,25 @@ if (isset($_POST['masuk'])) {
     $plat = strtoupper(mysqli_real_escape_string($conn, $_POST['plat_nomor']));
     $jenis = mysqli_real_escape_string($conn, $_POST['jenis_kendaraan']); 
     $id_area = intval($_POST['id_area']);
+    $metode_pembayaran = mysqli_real_escape_string($conn, $_POST['metode_pembayaran']); 
     
     $estimasi_hari = intval($_POST['estimasi_hari']);
     if ($estimasi_hari < 1) { $estimasi_hari = 1; }
     if ($estimasi_hari > 3) { $estimasi_hari = 3; }
+
+    // === PROTEKSI CEK KUOTA AREA PENUH ===
+    $q_cek_kuota = mysqli_query($conn, "
+        SELECT (a.kapasitas - (SELECT COUNT(*) FROM tb_transaksi t WHERE t.id_area = a.id_area AND t.status = 'masuk')) AS sisa_kuota 
+        FROM tb_area_parkir a WHERE a.id_area = '$id_area' LIMIT 1
+    ");
+    if ($q_cek_kuota && mysqli_num_rows($q_cek_kuota) > 0) {
+        $dt_k = mysqli_fetch_assoc($q_cek_kuota);
+        if (intval($dt_k['sisa_kuota']) <= 0) {
+            header("Location: petugas.php?status=error_penuh");
+            exit;
+        }
+    }
+    // ===================================
 
     $id_user = intval($_SESSION['id_user']);
     $waktu_masuk = date('Y-m-d H:i:s');
@@ -112,20 +156,72 @@ if (isset($_POST['masuk'])) {
         $id_kendaraan = mysqli_insert_id($conn);
     }
 
-    $q_tarif = mysqli_query($conn, "SELECT id_tarif FROM tb_tarif LIMIT 1");
+    $q_tarif = mysqli_query($conn, "SELECT * FROM tb_tarif WHERE LOWER(jenis_kendaraan) = '$jenis' LIMIT 1");
     $id_tarif = 1;
+    $tarif_harian = 15000;
     if ($q_tarif && mysqli_num_rows($q_tarif) > 0) {
         $dt = mysqli_fetch_assoc($q_tarif);
         $id_tarif = $dt['id_tarif'];
+        if (isset($dt['tarif_per_jam'])) { $tarif_harian = intval($dt['tarif_per_jam']); }
+        elseif (isset($dt['tarif_harian'])) { $tarif_harian = intval($dt['tarif_harian']); }
+        elseif (isset($dt['tarif'])) { $tarif_harian = intval($dt['tarif']); }
+        elseif (isset($dt['harga'])) { $tarif_harian = intval($dt['harga']); }
+        elseif (isset($dt['biaya'])) { $tarif_harian = intval($dt['biaya']); }
+    } else {
+        $q_tarif_all = mysqli_query($conn, "SELECT * FROM tb_tarif LIMIT 1");
+        if ($q_tarif_all && mysqli_num_rows($q_tarif_all) > 0) {
+            $dt_all = mysqli_fetch_assoc($q_tarif_all);
+            $id_tarif = $dt_all['id_tarif'];
+            if (isset($dt_all['tarif_per_jam'])) { $tarif_harian = intval($dt_all['tarif_per_jam']); }
+            elseif (isset($dt_all['tarif_harian'])) { $tarif_harian = intval($dt_all['tarif_harian']); }
+            elseif (isset($dt_all['tarif'])) { $tarif_harian = intval($dt_all['tarif']); }
+            elseif (isset($dt_all['harga'])) { $tarif_harian = intval($dt_all['harga']); }
+            elseif (isset($dt_all['biaya'])) { $tarif_harian = intval($dt_all['biaya']); }
+        }
     }
 
-    $cek_kolom = mysqli_query($conn, "SHOW COLUMNS FROM tb_transaksi LIKE 'durasi_jam'");
-    if ($cek_kolom && mysqli_num_rows($cek_kolom) > 0) {
-        mysqli_query($conn, "INSERT INTO tb_transaksi (id_parkir, id_kendaraan, waktu_masuk, id_tarif, status, id_user, id_area, durasi_jam) 
-                             VALUES ('$id_parkir', '$id_kendaraan', '$waktu_masuk', '$id_tarif', 'masuk', '$id_user', '$id_area', '$estimasi_hari')");
+    $total_biaya_masuk = $tarif_harian * $estimasi_hari;
+
+    $cek_kolom_metode = mysqli_query($conn, "SHOW COLUMNS FROM tb_transaksi LIKE 'metode_pembayaran'");
+    $cek_kolom_durasi = mysqli_query($conn, "SHOW COLUMNS FROM tb_transaksi LIKE 'durasi_jam'");
+    $cek_kolom_biaya = mysqli_query($conn, "SHOW COLUMNS FROM tb_transaksi LIKE 'biaya_total'");
+
+    if ($cek_kolom_metode && mysqli_num_rows($cek_kolom_metode) > 0) {
+        if ($cek_kolom_durasi && mysqli_num_rows($cek_kolom_durasi) > 0) {
+            if ($cek_kolom_biaya && mysqli_num_rows($cek_kolom_biaya) > 0) {
+                mysqli_query($conn, "INSERT INTO tb_transaksi (id_parkir, id_kendaraan, waktu_masuk, id_tarif, status, id_user, id_area, durasi_jam, metode_pembayaran, biaya_total) 
+                                     VALUES ('$id_parkir', '$id_kendaraan', '$waktu_masuk', '$id_tarif', 'masuk', '$id_user', '$id_area', '$estimasi_hari', '$metode_pembayaran', '$total_biaya_masuk')");
+            } else {
+                mysqli_query($conn, "INSERT INTO tb_transaksi (id_parkir, id_kendaraan, waktu_masuk, id_tarif, status, id_user, id_area, durasi_jam, metode_pembayaran) 
+                                     VALUES ('$id_parkir', '$id_kendaraan', '$waktu_masuk', '$id_tarif', 'masuk', '$id_user', '$id_area', '$estimasi_hari', '$metode_pembayaran')");
+            }
+        } else {
+            if ($cek_kolom_biaya && mysqli_num_rows($cek_kolom_biaya) > 0) {
+                mysqli_query($conn, "INSERT INTO tb_transaksi (id_parkir, id_kendaraan, waktu_masuk, id_tarif, status, id_user, id_area, metode_pembayaran, biaya_total) 
+                                     VALUES ('$id_parkir', '$id_kendaraan', '$waktu_masuk', '$id_tarif', 'masuk', '$id_user', '$id_area', '$metode_pembayaran', '$total_biaya_masuk')");
+            } else {
+                mysqli_query($conn, "INSERT INTO tb_transaksi (id_parkir, id_kendaraan, waktu_masuk, id_tarif, status, id_user, id_area, metode_pembayaran) 
+                                     VALUES ('$id_parkir', '$id_kendaraan', '$waktu_masuk', '$id_tarif', 'masuk', '$id_user', '$id_area', '$metode_pembayaran')");
+            }
+        }
     } else {
-        mysqli_query($conn, "INSERT INTO tb_transaksi (id_parkir, id_kendaraan, waktu_masuk, id_tarif, status, id_user, id_area) 
-                             VALUES ('$id_parkir', '$id_kendaraan', '$waktu_masuk', '$id_tarif', 'masuk', '$id_user', '$id_area')");
+        if ($cek_kolom_durasi && mysqli_num_rows($cek_kolom_durasi) > 0) {
+            if ($cek_kolom_biaya && mysqli_num_rows($cek_kolom_biaya) > 0) {
+                mysqli_query($conn, "INSERT INTO tb_transaksi (id_parkir, id_kendaraan, waktu_masuk, id_tarif, status, id_user, id_area, durasi_jam, biaya_total) 
+                                     VALUES ('$id_parkir', '$id_kendaraan', '$waktu_masuk', '$id_tarif', 'masuk', '$id_user', '$id_area', '$estimasi_hari', '$total_biaya_masuk')");
+            } else {
+                mysqli_query($conn, "INSERT INTO tb_transaksi (id_parkir, id_kendaraan, waktu_masuk, id_tarif, status, id_user, id_area, durasi_jam) 
+                                     VALUES ('$id_parkir', '$id_kendaraan', '$waktu_masuk', '$id_tarif', 'masuk', '$id_user', '$id_area', '$estimasi_hari')");
+            }
+        } else {
+            if ($cek_kolom_biaya && mysqli_num_rows($cek_kolom_biaya) > 0) {
+                mysqli_query($conn, "INSERT INTO tb_transaksi (id_parkir, id_kendaraan, waktu_masuk, id_tarif, status, id_user, id_area, biaya_total) 
+                                     VALUES ('$id_parkir', '$id_kendaraan', '$waktu_masuk', '$id_tarif', 'masuk', '$id_user', '$id_area', '$total_biaya_masuk')");
+            } else {
+                mysqli_query($conn, "INSERT INTO tb_transaksi (id_parkir, id_kendaraan, waktu_masuk, id_tarif, status, id_user, id_area) 
+                                     VALUES ('$id_parkir', '$id_kendaraan', '$waktu_masuk', '$id_tarif', 'masuk', '$id_user', '$id_area')");
+            }
+        }
     }
     
     $q_nm_area = mysqli_query($conn, "SELECT nama_area FROM tb_area_parkir WHERE id_area = '$id_area' LIMIT 1");
@@ -135,7 +231,9 @@ if (isset($_POST['masuk'])) {
                     "&plat=" . urlencode($plat) . 
                     "&jenis=" . urlencode(ucfirst($jenis)) . 
                     "&area=" . urlencode($dt_nm_area) . 
-                    "&estimasi=" . $estimasi_hari;
+                    "&estimasi=" . $estimasi_hari .
+                    "&metode=" . urlencode($metode_pembayaran) .
+                    "&nominal=" . $total_biaya_masuk;
     header("Location: " . $url_redirect);
     exit;
 }
@@ -160,13 +258,23 @@ if (isset($_POST['id_parkir']) && !isset($_POST['masuk'])) {
         $lama_hari = ceil($selisih_detik / (60 * 60 * 24));
         if ($lama_hari < 1) { $lama_hari = 1; }
 
-        $tarif_harian = ($jenis == 'mobil') ? 25000 : 15000;
+        $q_tarif_keluar = mysqli_query($conn, "SELECT * FROM tb_tarif WHERE LOWER(jenis_kendaraan) = '$jenis' LIMIT 1");
+        $tarif_harian = 15000;
+        if ($q_tarif_keluar && mysqli_num_rows($q_tarif_keluar) > 0) {
+            $dt_t = mysqli_fetch_assoc($q_tarif_keluar);
+            if (isset($dt_t['tarif_per_jam'])) { $tarif_harian = intval($dt_t['tarif_per_jam']); }
+            elseif (isset($dt_t['tarif_harian'])) { $tarif_harian = intval($dt_t['tarif_harian']); }
+            elseif (isset($dt_t['tarif'])) { $tarif_harian = intval($dt_t['tarif']); }
+            elseif (isset($dt_t['harga'])) { $tarif_harian = intval($dt_t['harga']); }
+            elseif (isset($dt_t['biaya'])) { $tarif_harian = intval($dt_t['biaya']); }
+        }
+
         $biaya_dasar = $tarif_harian * $estimasi_pilihan;
 
         $denda = 0;
         if ($lama_hari > $estimasi_pilihan) {
             $kelebihan_hari = $lama_hari - $estimasi_pilihan;
-            $denda = $kelebihan_hari * 100000;
+            $denda = $kelebihan_hari * 100000; 
         }
 
         $total_bayar = $biaya_dasar + $denda;
@@ -210,6 +318,8 @@ $query_transaksi_inap = mysqli_query($conn, "SELECT t.*, k.plat_nomor, k.jenis_k
                                            LEFT JOIN tb_area_parkir a ON t.id_area = a.id_area 
                                            WHERE t.status = 'masuk' 
                                            ORDER BY t.waktu_masuk DESC");
+
+$query_daftar_tarif = mysqli_query($conn, "SELECT * FROM tb_tarif");
 ?>
 <!DOCTYPE html>
 <html lang="id">
@@ -222,6 +332,7 @@ $query_transaksi_inap = mysqli_query($conn, "SELECT t.*, k.plat_nomor, k.jenis_k
     <title>Dashboard Petugas - Stasiun Parking</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
     <style>
         body { 
@@ -257,13 +368,7 @@ $query_transaksi_inap = mysqli_query($conn, "SELECT t.*, k.plat_nomor, k.jenis_k
         .table-custom th { background-color: #0f172a !important; color: #ffffff; text-transform: uppercase; font-size: 0.75rem; padding: 0.85rem 1rem; border-color: rgba(255,255,255,0.05); }
         .table-custom td { padding: 0.85rem 1rem; vertical-align: middle; border-color: rgba(255,255,255,0.05); position: relative; }
         .table-hover tbody tr:hover { background-color: rgba(255, 255, 255, 0.04); color: #ffffff; }
-        
-        .btn-proses-keluar {
-            position: relative;
-            z-index: 10;
-            cursor: pointer;
-        }
-
+        .btn-proses-keluar { position: relative; z-index: 10; cursor: pointer; }
         .form-control, .form-select {
             background-color: rgba(15, 23, 42, 0.6);
             border: 1px solid rgba(255, 255, 255, 0.15);
@@ -278,45 +383,17 @@ $query_transaksi_inap = mysqli_query($conn, "SELECT t.*, k.plat_nomor, k.jenis_k
         .form-control::placeholder { color: #94a3b8; }
         @media print {
             body * { visibility: hidden; }
-            #print-area, #print-area * { visibility: visible; }
+            #print-area, #print-area *, #print-karcis-area, #print-karcis-area * { visibility: visible; }
             #print-area { position: absolute; left: 0; top: 0; width: 100%; color: #000; }
+            #print-karcis-area { position: absolute; left: 0; top: 0; width: 100%; color: #000; }
         }
     </style>
 </head>
 <body>
-    <!-- PANGGIL FILE AUDIO DARI FOLDER -->
     <audio id="sound-click" src="img/click.mp3" preload="auto"></audio>
     <audio id="sound-success" src="img/berhasil.MPEG" preload="auto"></audio>
     <audio id="sound-batal" src="img/salah.MPEG" preload="auto"></audio>
     <audio id="sound-hapus" src="img/salah.MPEG" preload="auto"></audio>
-
-    <script>
-    function playAudio(type) {
-        try {
-            let audioElem = null;
-            if (type === 'success') {
-                audioElem = document.getElementById('sound-success');
-            } else if (type === 'batal' || type === 'warning') {
-                audioElem = document.getElementById('sound-batal');
-            } else if (type === 'hapus') {
-                audioElem = document.getElementById('sound-hapus');
-            } else if (type === 'logout') {
-                audioElem = document.getElementById('sound-logout');
-            } else {
-                audioElem = document.getElementById('sound-click');
-            }
-
-            if (audioElem) {
-                audioElem.currentTime = 0;
-                audioElem.play().catch(e => {
-                    console.log("Audio play blocked or error: ", e);
-                });
-            }
-        } catch(e) {
-            console.log("Audio Error: ", e);
-        }
-    }
-    </script>
 
     <nav class="navbar navbar-dark navbar-custom px-4 py-3 shadow-sm sticky-top">
         <div class="container-fluid">
@@ -396,7 +473,7 @@ $query_transaksi_inap = mysqli_query($conn, "SELECT t.*, k.plat_nomor, k.jenis_k
 
         <!-- BAGIAN 2: INPUT KENDARAAN INAP MANUAL -->
         <div class="card">
-            <div class="card-header py-3 px-4 fw-bold">🚗 Input Kendaraan Inap Masuk Manual (Mobil: Rp 25k/hari | Motor: Rp 15k/hari)</div>
+            <div class="card-header py-3 px-4 fw-bold">🚗 Input Kendaraan Inap Masuk Manual (Tarif Per Hari Sesuai Database)</div>
             <div class="card-body p-4">
                 <form action="petugas.php" method="POST" class="row g-3" id="form-masuk-inap">
                     <div class="col-md-3">
@@ -407,8 +484,25 @@ $query_transaksi_inap = mysqli_query($conn, "SELECT t.*, k.plat_nomor, k.jenis_k
                         <label class="form-label fw-semibold small text-info">JENIS KENDARAAN</label>
                         <select name="jenis_kendaraan" id="jenis_kendaraan" class="form-select" required>
                             <option value="">-- Pilih Jenis --</option>
-                            <option value="motor">Motor (Rp 15.000 / hari)</option>
-                            <option value="mobil">Mobil (Rp 25.000 / hari)</option>
+                            <?php 
+                            if ($query_daftar_tarif && mysqli_num_rows($query_daftar_tarif) > 0) {
+                                mysqli_data_seek($query_daftar_tarif, 0);
+                                while($trf = mysqli_fetch_assoc($query_daftar_tarif)) {
+                                    $jns = strtolower($trf['jenis_kendaraan']);
+                                    $harga = 0;
+                                    if (isset($trf['tarif_per_jam'])) { $harga = $trf['tarif_per_jam']; }
+                                    elseif (isset($trf['tarif_harian'])) { $harga = $trf['tarif_harian']; }
+                                    elseif (isset($trf['tarif'])) { $harga = $trf['tarif']; }
+                                    elseif (isset($trf['harga'])) { $harga = $trf['harga']; }
+                                    elseif (isset($trf['biaya'])) { $harga = $trf['biaya']; }
+                            ?>
+                                <option value="<?= $jns; ?>" data-tarif="<?= $harga; ?>">
+                                    <?= ucfirst($jns); ?> (Rp <?= number_format($harga, 0, ',', '.'); ?> / hari)
+                                </option>
+                            <?php 
+                                }
+                            }
+                            ?>
                         </select>
                     </div>
                     <div class="col-md-3">
@@ -419,9 +513,10 @@ $query_transaksi_inap = mysqli_query($conn, "SELECT t.*, k.plat_nomor, k.jenis_k
                             if ($query_area_sisa && mysqli_num_rows($query_area_sisa) > 0) {
                                 while($a = mysqli_fetch_assoc($query_area_sisa)) { 
                                     $sisa = max(0, $a['sisa_kuota']);
+                                    $jenis_area_db = isset($a['jenis_kendaraan']) ? strtolower(trim($a['jenis_kendaraan'])) : '';
                             ?>
-                                <option value="<?= $a['id_area']; ?>">
-                                    <?= htmlspecialchars($a['nama_area']); ?> (Sisa: <?= $sisa; ?> dari <?= $a['kapasitas']; ?>)
+                                <option value="<?= $a['id_area']; ?>" data-jenis="<?= $jenis_area_db; ?>">
+                                    <?= htmlspecialchars($a['nama_area']); ?> <?= $jenis_area_db ? '(' . ucfirst($jenis_area_db) . ')' : ''; ?> (Sisa: <?= $sisa; ?> dari <?= $a['kapasitas']; ?>)
                                 </option>
                             <?php 
                                 }
@@ -431,8 +526,24 @@ $query_transaksi_inap = mysqli_query($conn, "SELECT t.*, k.plat_nomor, k.jenis_k
                     </div>
                     <div class="col-md-3">
                         <label class="form-label fw-semibold small text-info">ESTIMASI INAP (1 - 3 HARI)</label>
-                        <input type="number" name="estimasi_hari" class="form-control" value="1" min="1" max="3" required>
+                        <input type="number" name="estimasi_hari" id="estimasi_hari" class="form-control" value="1" min="1" max="3" required>
                     </div>
+
+                    <div class="col-md-4 mt-3">
+                        <label class="form-label fw-semibold small text-info">METODE PEMBAYARAN</label>
+                        <select name="metode_pembayaran" id="metode_pembayaran" class="form-select" required>
+                            <option value="Cash">Cash (Tunai)</option>
+                            <option value="Digital">Digital (QRIS / QR Code)</option>
+                        </select>
+                    </div>
+
+                    <div class="col-md-8 mt-3" id="area-qr-container" style="display: none;">
+                        <label class="form-label fw-semibold small text-warning">SCAN QR CODE PEMBAYARAN DIGITAL</label>
+                        <div class="bg-dark p-3 rounded border border-secondary d-inline-block">
+                            <img src="img/qr.jpeg" alt="QR Code Pembayaran" class="img-fluid rounded bg-white p-2" style="max-width: 210px; max-height: 210px;" onerror="this.onerror=null; this.src='img/qr.jpg';">
+                        </div>
+                    </div>
+
                     <div class="col-12 mt-4">
                         <button type="submit" name="masuk" value="1" class="btn btn-info px-4 rounded-pill fw-semibold text-dark btn-aksi-simpan">Simpan Masuk Inap</button>
                     </div>
@@ -456,7 +567,7 @@ $query_transaksi_inap = mysqli_query($conn, "SELECT t.*, k.plat_nomor, k.jenis_k
                                 <th>Pilihan Inap</th>
                                 <th>Estimasi Denda</th>
                                 <th>Total Estimasi</th>
-                                <th class="text-center">Aksi / Keluar</th>
+                                <th class="text-center">Aksi / Cetak / Keluar</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -466,27 +577,59 @@ $query_transaksi_inap = mysqli_query($conn, "SELECT t.*, k.plat_nomor, k.jenis_k
                                     $waktu_masuk = $t['waktu_masuk'];
                                     $estimasi_pilihan = isset($t['durasi_jam']) && intval($t['durasi_jam']) > 0 ? intval($t['durasi_jam']) : 1;
                                     $total_jam_target = $estimasi_pilihan * 24; 
+
+                                    $jns_t = strtolower($t['jenis_kendaraan']);
+                                    $q_trf_row = mysqli_query($conn, "SELECT * FROM tb_tarif WHERE LOWER(jenis_kendaraan) = '$jns_t' LIMIT 1");
+                                    $tarif_harian_row = 15000;
+                                    if ($q_trf_row && mysqli_num_rows($q_trf_row) > 0) {
+                                        $dt_trf_row = mysqli_fetch_assoc($q_trf_row);
+                                        if (isset($dt_trf_row['tarif_per_jam'])) { $tarif_harian_row = intval($dt_trf_row['tarif_per_jam']); }
+                                        elseif (isset($dt_trf_row['tarif_harian'])) { $tarif_harian_row = intval($dt_trf_row['tarif_harian']); }
+                                        elseif (isset($dt_trf_row['tarif'])) { $tarif_harian_row = intval($dt_trf_row['tarif']); }
+                                        elseif (isset($dt_trf_row['harga'])) { $tarif_harian_row = intval($dt_trf_row['harga']); }
+                                        elseif (isset($dt_trf_row['biaya'])) { $tarif_harian_row = intval($dt_trf_row['biaya']); }
+                                    }
+
+                                    $id_parkir_val = $t['id_parkir'];
+                                    $plat_val = $t['plat_nomor'];
+                                    $jenis_val = ucfirst($t['jenis_kendaraan']);
+                                    $area_val = isset($t['nama_area']) ? $t['nama_area'] : 'Umum';
+                                    $metode_val = isset($t['metode_pembayaran']) ? $t['metode_pembayaran'] : 'Cash';
+                                    
+                                    $nominal_db_struk = isset($t['biaya_total']) && intval($t['biaya_total']) > 0 ? intval($t['biaya_total']) : ($tarif_harian_row * $estimasi_pilihan);
                             ?>
                             <tr>
                                 <td class="ps-4 fw-bold"><?= htmlspecialchars($t['plat_nomor']); ?></td>
                                 <td class="text-muted"><?= ucfirst($t['jenis_kendaraan']); ?></td>
-                                <td><?= htmlspecialchars($t['nama_area'] ?? 'Umum'); ?></td>
-                                <td><?= $waktu_masuk; ?></td>
+                                <td class="td-area"><?= htmlspecialchars($t['nama_area'] ?? 'Umum'); ?></td>
+                                <td class="td-waktu"><?= $waktu_masuk; ?></td>
                                 <td>
                                     <span class="badge bg-warning text-dark fw-bold countdown-timer" data-masuk="<?= $waktu_masuk; ?>" data-target-jam="<?= $total_jam_target; ?>">
                                         Menghitung...
                                     </span>
                                 </td>
-                                <td><?= $estimasi_pilihan; ?> Hari (<?= $total_jam_target; ?> Jam)</td>
+                                <td><span class="td-durasi" data-durasi="<?= $estimasi_pilihan; ?>"><?= $estimasi_pilihan; ?></span> Hari (<?= $total_jam_target; ?> Jam)</td>
                                 <td>
                                     <span class="badge bg-success denda-badge" data-masuk="<?= $waktu_masuk; ?>" data-target-jam="<?= $total_jam_target; ?>">Rp 0 (Aman)</span>
                                 </td>
-                                <td class="fw-bold text-info total-tagihan-badge" data-masuk="<?= $waktu_masuk; ?>" data-jenis="<?= $t['jenis_kendaraan']; ?>" data-durasi="<?= $estimasi_pilihan; ?>">Rp 0</td>
+                                <td class="fw-bold text-info total-tagihan-badge" data-masuk="<?= $waktu_masuk; ?>" data-jenis="<?= $t['jenis_kendaraan']; ?>" data-durasi="<?= $estimasi_pilihan; ?>" data-tarif="<?= $tarif_harian_row; ?>">Rp 0</td>
                                 <td class="text-center">
-                                    <form action="petugas.php" method="POST" class="d-inline">
-                                        <input type="hidden" name="id_parkir" value="<?= $t['id_parkir']; ?>">
-                                        <button type="submit" class="btn btn-sm btn-danger rounded-pill px-3 btn-proses-keluar">🚗 Proses Keluar</button>
-                                    </form>
+                                    <div class="d-flex justify-content-center gap-1">
+                                        <!-- Tombol Cetak Karcis Masuk -->
+                                        <button type="button" class="btn btn-sm btn-info text-dark rounded-pill px-2" title="Cetak Karcis Masuk" onclick="tampilkanKarcisMasuk('<?= $id_parkir_val; ?>', '<?= $plat_val; ?>', '<?= $jenis_val; ?>', '<?= $area_val; ?>', '<?= $waktu_masuk; ?>', '<?= $estimasi_pilihan; ?>')">
+                                            <i class="fa-solid fa-ticket"></i>
+                                        </button>
+
+                                        <!-- Tombol Cetak Bukti Pembayaran / Struk (Dengan Rincian Denda Realtime) -->
+                                        <button type="button" class="btn btn-sm btn-warning rounded-pill px-2 btn-struk-inap" title="Cetak Bukti Pembayaran / Struk" data-id="<?= $id_parkir_val; ?>" data-plat="<?= $plat_val; ?>" data-jenis="<?= $jenis_val; ?>" data-area="<?= $area_val; ?>" data-waktu="<?= $waktu_masuk; ?>" data-estimasi="<?= $estimasi_pilihan; ?>" data-metode="<?= $metode_val; ?>" data-tarif="<?= $tarif_harian_row; ?>">
+                                            <i class="fa-solid fa-print"></i>
+                                        </button>
+                                        
+                                        <form action="petugas.php" method="POST" class="d-inline">
+                                            <input type="hidden" name="id_parkir" value="<?= $t['id_parkir']; ?>">
+                                            <button type="submit" class="btn btn-sm btn-danger rounded-pill px-3 btn-proses-keluar">🚗 Proses Keluar</button>
+                                        </form>
+                                    </div>
                                 </td>
                             </tr>
                             <?php 
@@ -502,18 +645,18 @@ $query_transaksi_inap = mysqli_query($conn, "SELECT t.*, k.plat_nomor, k.jenis_k
         </div>
     </div>
 
-    <!-- MODAL CETAK STRUK MASUK -->
+    <!-- MODAL CETAK STRUK MASUK & BUKTI PEMBAYARAN -->
     <div class="modal fade" id="modalStruk" tabindex="-1" aria-hidden="true">
         <div class="modal-dialog modal-sm">
             <div class="modal-content bg-dark text-light border-secondary">
                 <div class="modal-header border-secondary">
-                    <h5 class="modal-title fs-6 fw-bold">Struk Parkir Inap Stasiun</h5>
+                    <h5 class="modal-title fs-6 fw-bold">Bukti Pembayaran & Struk Parkir</h5>
                     <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
                 <div class="modal-body" id="print-area">
                     <div class="text-center mb-3">
                         <h6 class="fw-bold mb-0">STASIUN PARKING SYSTEM</h6>
-                        <small class="text-muted">Bukti Masuk Parkir Inap</small>
+                        <small class="text-muted">Bukti Pembayaran & Masuk Parkir</small>
                     </div>
                     <hr class="border-secondary">
                     <table class="w-100 small text-light">
@@ -522,14 +665,53 @@ $query_transaksi_inap = mysqli_query($conn, "SELECT t.*, k.plat_nomor, k.jenis_k
                         <tr><td>Kendaraan</td><td>: <span id="s-jenis"></span></td></tr>
                         <tr><td>Area Inap</td><td>: <span id="s-area"></span></td></tr>
                         <tr><td>Waktu Masuk</td><td>: <span id="s-waktu"></span></td></tr>
-                        <tr><td>Estimasi Inap</td><td>: <strong id="s-estimasi"></strong> Hari</td></tr>
+                        <tr><td>Durasi Rencana</td><td>: <strong id="s-estimasi"></strong> Hari</td></tr>
+                        <tr><td>Biaya Dasar</td><td>: <span id="s-biaya-dasar"></span></td></tr>
+                        <tr><td>Keterlambatan</td><td>: <span id="s-keterlambatan"></span></td></tr>
+                        <tr><td>Denda Keterlambatan</td><td>: <strong class="text-danger" id="s-denda"></strong></td></tr>
+                        <tr><td>Pembayaran</td><td>: <strong id="s-metode"></strong></td></tr>
+                        <tr><td>Total Bayar</td><td>: <strong class="text-warning" id="s-nominal"></strong></td></tr>
+                        <tr><td>Status Bayar</td><td>: <span class="badge bg-success">LUNAS / AKTIF</span></td></tr>
                     </table>
                     <hr class="border-secondary">
-                    <div class="text-center text-muted" style="font-size: 0.75rem;">Simpan struk ini untuk pengambilan kendaraan.</div>
+                    <div class="text-center text-muted" style="font-size: 0.75rem;">Simpan bukti ini sebagai tanda pembayaran sah.</div>
                 </div>
                 <div class="modal-footer border-secondary">
                     <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Tutup</button>
-                    <button type="button" class="btn btn-info btn-sm text-dark fw-semibold" onclick="window.print()">Cetak Struk</button>
+                    <button type="button" class="btn btn-info btn-sm text-dark fw-semibold" onclick="window.print()">Cetak Bukti Bayar</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL CETAK KARCIS MASUK -->
+    <div class="modal fade" id="modalKarcis" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-sm">
+            <div class="modal-content bg-dark text-light border-secondary">
+                <div class="modal-header border-secondary">
+                    <h5 class="modal-title fs-6 fw-bold">Karcis Masuk Parkir</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body" id="print-karcis-area">
+                    <div class="text-center mb-3">
+                        <h6 class="fw-bold mb-0">KARCIS MASUK STASIUN</h6>
+                        <small class="text-muted">Harap Simpan Karcis Ini Dengan Baik</small>
+                    </div>
+                    <hr class="border-secondary">
+                    <table class="w-100 small text-light">
+                        <tr><td>ID Karcis</td><td>: <span id="k-id"></span></td></tr>
+                        <tr><td>Plat Nomor</td><td>: <strong id="k-plat"></strong></td></tr>
+                        <tr><td>Jenis</td><td>: <span id="k-jenis"></span></td></tr>
+                        <tr><td>Area Inap</td><td>: <span id="k-area"></span></td></tr>
+                        <tr><td>Waktu Masuk</td><td>: <span id="k-waktu"></span></td></tr>
+                        <tr><td>Durasi Inap</td><td>: <strong id="k-estimasi"></strong> Hari</td></tr>
+                    </table>
+                    <hr class="border-secondary">
+                    <div class="text-center text-muted" style="font-size: 0.75rem;">Kehilangan karcis dikenakan denda administrasi.</div>
+                </div>
+                <div class="modal-footer border-secondary">
+                    <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Tutup</button>
+                    <button type="button" class="btn btn-info btn-sm text-dark fw-semibold" onclick="window.print()">Cetak Karcis</button>
                 </div>
             </div>
         </div>
@@ -538,28 +720,86 @@ $query_transaksi_inap = mysqli_query($conn, "SELECT t.*, k.plat_nomor, k.jenis_k
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 
     <script>
-    // 1. Tombol SETUJU
-    document.querySelectorAll('.btn-aksi-setuju').forEach(btn => {
-        btn.addEventListener('click', function(e) {
-            playAudio('success');
-        });
-    });
+    function playAudio(type) {
+        let audioId = 'sound-click';
+        if (type === 'success') audioId = 'sound-success';
+        if (type === 'batal') audioId = 'sound-batal';
+        if (type === 'logout') audioId = 'sound-hapus';
+        const audio = document.getElementById(audioId);
+        if (audio) {
+            audio.currentTime = 0;
+            audio.play().catch(e => {});
+        }
+    }
 
-    // 2. Tombol BATAL
-    document.querySelectorAll('.btn-aksi-batal').forEach(btn => {
-        btn.addEventListener('click', function(e) {
-            playAudio('batal');
-        });
-    });
+    function hitungEstimasiLive() {
+        const selectJenis = document.getElementById('jenis_kendaraan');
+        const inputEstimasi = document.getElementById('estimasi_hari');
+        const labelBiaya = document.getElementById('live-estimasi-biaya');
 
-    // 3. Tombol HAPUS
-    document.querySelectorAll('.btn-aksi-hapus').forEach(btn => {
-        btn.addEventListener('click', function(e) {
-            playAudio('hapus');
-        });
-    });
+        if (selectJenis && selectJenis.selectedIndex > 0 && inputEstimasi) {
+            const selectedOption = selectJenis.options[selectJenis.selectedIndex];
+            const tarifPerHari = parseInt(selectedOption.getAttribute('data-tarif')) || 0;
+            const jumlahHari = parseInt(inputEstimasi.value) || 1;
+            const total = tarifPerHari * jumlahHari;
 
-    // 4. Tombol SIMPAN MASUK INAP
+            if(labelBiaya) labelBiaya.innerText = "Rp " + total.toLocaleString('id-ID');
+        } else {
+            if(labelBiaya) labelBiaya.innerText = "Rp 0";
+        }
+    }
+
+    const elemJenisKendaraan = document.getElementById('jenis_kendaraan');
+    if (elemJenisKendaraan) {
+        elemJenisKendaraan.addEventListener('change', function() {
+            var jenisPilih = this.value.toLowerCase(); 
+            var selectArea = document.getElementById('id_area');
+            var options = selectArea.options;
+
+            selectArea.value = ""; 
+            var firstMatchIndex = -1;
+
+            for (var i = 0; i < options.length; i++) {
+                var opt = options[i];
+                if (opt.value === "") continue; 
+
+                var jenisArea = opt.getAttribute('data-jenis') ? opt.getAttribute('data-jenis').toLowerCase() : '';
+
+                if (jenisArea === "" || jenisArea === jenisPilih) {
+                    opt.style.display = "block";
+                    if (jenisArea === jenisPilih && firstMatchIndex === -1) {
+                        firstMatchIndex = i;
+                    }
+                } else {
+                    opt.style.display = "none";
+                }
+            }
+
+            if (firstMatchIndex !== -1) {
+                selectArea.selectedIndex = firstMatchIndex;
+            }
+
+            hitungEstimasiLive();
+        });
+    }
+
+    const elemEstimasiHari = document.getElementById('estimasi_hari');
+    if (elemEstimasiHari) {
+        elemEstimasiHari.addEventListener('input', hitungEstimasiLive);
+    }
+
+    const elemMetodePembayaran = document.getElementById('metode_pembayaran');
+    if (elemMetodePembayaran) {
+        elemMetodePembayaran.addEventListener('change', function() {
+            const qrContainer = document.getElementById('area-qr-container');
+            if (this.value === 'Digital') {
+                qrContainer.style.display = 'block';
+            } else {
+                qrContainer.style.display = 'none';
+            }
+        });
+    }
+
     const formMasukInap = document.getElementById('form-masuk-inap');
     if (formMasukInap) {
         formMasukInap.addEventListener('submit', function(e) {
@@ -567,7 +807,6 @@ $query_transaksi_inap = mysqli_query($conn, "SELECT t.*, k.plat_nomor, k.jenis_k
         });
     }
 
-    // 5. Tombol AKSI KELUAR / PROSES KELUAR
     document.addEventListener('click', function(e) {
         const btn = e.target.closest('.btn-proses-keluar');
         if (btn) {
@@ -593,7 +832,6 @@ $query_transaksi_inap = mysqli_query($conn, "SELECT t.*, k.plat_nomor, k.jenis_k
         }
     });
 
-    // 6. Tombol LOGOUT
     const btnLogout = document.getElementById('btn-logout');
     if (btnLogout) {
         btnLogout.addEventListener('click', function(e) {
@@ -622,7 +860,6 @@ $query_transaksi_inap = mysqli_query($conn, "SELECT t.*, k.plat_nomor, k.jenis_k
         });
     }
 
-    // Notifikasi status sukses dari URL parameter
     const urlParams = new URLSearchParams(window.location.search);
     const statusParam = urlParams.get('status');
 
@@ -635,30 +872,6 @@ $query_transaksi_inap = mysqli_query($conn, "SELECT t.*, k.plat_nomor, k.jenis_k
             if (statusParam === 'sukses_hapus') pesan = "Data booking berhasil dihapus.";
             if (statusParam === 'sukses_masuk') {
                 pesan = "Kendaraan inap berhasil dicatat!";
-                const idParkirBaru = urlParams.get('id_parkir');
-                const platBaru = urlParams.get('plat');
-                const jenisBaru = urlParams.get('jenis');
-                const areaBaru = urlParams.get('area');
-                const estimasiBaru = urlParams.get('estimasi');
-
-                if(idParkirBaru) {
-                    const d = new Date();
-                    const waktuFormatted = d.getFullYear() + '-' + 
-                        String(d.getMonth() + 1).padStart(2, '0') + '-' + 
-                        String(d.getDate()).padStart(2, '0') + ' ' + 
-                        String(d.getHours()).padStart(2, '0') + ':' + 
-                        String(d.getMinutes()).padStart(2, '0') + ':' + 
-                        String(d.getSeconds()).padStart(2, '0');
-
-                    tampilkanStrukMasuk(
-                        idParkirBaru, 
-                        platBaru ? platBaru : '-', 
-                        jenisBaru ? jenisBaru : '-', 
-                        areaBaru ? areaBaru : 'Umum', 
-                        waktuFormatted, 
-                        estimasiBaru ? estimasiBaru : '1'
-                    );
-                }
             }
             if (statusParam === 'sukses_keluar') pesan = "Kendaraan berhasil diproses keluar.";
 
@@ -669,9 +882,17 @@ $query_transaksi_inap = mysqli_query($conn, "SELECT t.*, k.plat_nomor, k.jenis_k
                 timer: 3000,
                 showConfirmButton: false
             });
-
-            window.history.replaceState({}, document.title, window.location.pathname);
+        } else if (statusParam === 'error_penuh') {
+            playAudio('batal');
+            Swal.fire({
+                icon: 'error',
+                title: 'Area Penuh!',
+                text: 'Maaf, sisa kuota untuk area parkir yang dipilih sudah habis (0). Kendaraan tidak dapat dimasukkan.',
+                confirmButtonColor: '#d33'
+            });
         }
+
+        window.history.replaceState({}, document.title, window.location.pathname);
     }
 
     function updateTimers() {
@@ -719,8 +940,7 @@ $query_transaksi_inap = mysqli_query($conn, "SELECT t.*, k.plat_nomor, k.jenis_k
 
             if (tagihanBadges[index]) {
                 const durasi = parseInt(tagihanBadges[index].getAttribute('data-durasi'));
-                const jenis = tagihanBadges[index].getAttribute('data-jenis').toLowerCase();
-                const tarifHarian = (jenis === 'mobil') ? 25000 : 15000;
+                const tarifHarian = parseInt(tagihanBadges[index].getAttribute('data-tarif'));
                 const biayaDasar = tarifHarian * durasi;
 
                 const selisihKeluarMs = sekarang - masukDate;
@@ -741,16 +961,62 @@ $query_transaksi_inap = mysqli_query($conn, "SELECT t.*, k.plat_nomor, k.jenis_k
     setInterval(updateTimers, 1000);
     updateTimers();
 
-    function tampilkanStrukMasuk(id, plat, jenis, area, waktu, estimasi) {
-        document.getElementById('s-id').innerText = id;
-        document.getElementById('s-plat').innerText = plat.toUpperCase();
-        document.getElementById('s-jenis').innerText = jenis;
-        document.getElementById('s-area').innerText = area ? area : 'Umum';
-        document.getElementById('s-waktu').innerText = waktu;
-        document.getElementById('s-estimasi').innerText = estimasi;
+    document.addEventListener('click', function(e) {
+        const btnStruk = e.target.closest('.btn-struk-inap');
+        if (btnStruk) {
+            const id = btnStruk.getAttribute('data-id');
+            const plat = btnStruk.getAttribute('data-plat');
+            const jenis = btnStruk.getAttribute('data-jenis');
+            const area = btnStruk.getAttribute('data-area');
+            const waktuMasukStr = btnStruk.getAttribute('data-waktu');
+            const durasiRencana = parseInt(btnStruk.getAttribute('data-estimasi')) || 1;
+            const metode = btnStruk.getAttribute('data-metode');
+            const tarifHarian = parseInt(btnStruk.getAttribute('data-tarif')) || 15000;
 
-        var myModal = new bootstrap.Modal(document.getElementById('modalStruk'));
-        myModal.show();
+            const biayaDasar = tarifHarian * durasiRencana;
+            
+            const masukDate = new Date(waktuMasukStr.replace(/-/g, "/"));
+            const sekarang = new Date();
+            const selisihKeluarMs = sekarang - masukDate;
+            const lamaHariBerjalan = Math.ceil(selisihKeluarMs / (1000 * 60 * 60 * 24));
+            const realHari = lamaHariBerjalan < 1 ? 1 : lamaHariBerjalan;
+
+            let denda = 0;
+            let hariTerlambat = 0;
+            if (realHari > durasiRencana) {
+                hariTerlambat = realHari - durasiRencana;
+                denda = hariTerlambat * 100000; 
+            }
+
+            const totalBayar = biayaDasar + denda;
+
+            document.getElementById('s-id').innerText = id;
+            document.getElementById('s-plat').innerText = plat.toUpperCase();
+            document.getElementById('s-jenis').innerText = jenis;
+            document.getElementById('s-area').innerText = area ? area : 'Umum';
+            document.getElementById('s-waktu').innerText = waktuMasukStr;
+            document.getElementById('s-estimasi').innerText = durasiRencana;
+            document.getElementById('s-biaya-dasar').innerText = "Rp " + biayaDasar.toLocaleString('id-ID');
+            document.getElementById('s-keterlambatan').innerText = hariTerlambat > 0 ? `${hariTerlambat} Hari` : "Tidak ada";
+            document.getElementById('s-denda').innerText = "Rp " + denda.toLocaleString('id-ID');
+            document.getElementById('s-metode').innerText = metode;
+            document.getElementById('s-nominal').innerText = "Rp " + totalBayar.toLocaleString('id-ID');
+
+            var myModal = new bootstrap.Modal(document.getElementById('modalStruk'));
+            myModal.show();
+        }
+    });
+
+    function tampilkanKarcisMasuk(id, plat, jenis, area, waktu, estimasi) {
+        document.getElementById('k-id').innerText = id;
+        document.getElementById('k-plat').innerText = plat.toUpperCase();
+        document.getElementById('k-jenis').innerText = jenis;
+        document.getElementById('k-area').innerText = area ? area : 'Umum';
+        document.getElementById('k-waktu').innerText = waktu;
+        document.getElementById('k-estimasi').innerText = estimasi;
+
+        var karcisModal = new bootstrap.Modal(document.getElementById('modalKarcis'));
+        karcisModal.show();
     }
     </script>
 </body>
