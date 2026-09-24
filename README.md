@@ -5,7 +5,7 @@ Sistem Informasi Manajemen Parkir berbasis web yang dirancang khusus untuk menge
 **Flowchart:** [Flowchart](https://raw.githubusercontent.com/Faizalikhramtamim/stasiun/refs/heads/main/ChatGPT%20Image%202%20Sep%202026%2C%2011.32.06.png)  
 **Mockup:** [Mockup](https://raw.githubusercontent.com/Faizalikhramtamim/stasiun/refs/heads/main/ChatGPT%20Image%202%20Sep%202026%2C%2011.13.22.png)  
 **Algoritma:** [Algoritma](https://canva.link/4804dt83ke99y4s)
-   aset code https://github.com/Faizalikhramtamim/stasiun
+**aset code:** https://github.com/Faizalikhramtamim/stasiun
 ---
 
 ## ✨ Fitur Utama
